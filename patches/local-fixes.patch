@@ -1,0 +1,92 @@
+diff --git a/renderers/video_renderer.c b/renderers/video_renderer.c
+index b6c1f1c..0b00ce9 100644
+--- a/renderers/video_renderer.c
++++ b/renderers/video_renderer.c
+@@ -264,6 +264,44 @@ g_string_replace (GString     *string,
+ }
+ #endif
+ 
++/* Some CDNs reject or throttle the default "GStreamer souphttpsrc" User-Agent;
++ * present the one an Apple TV's media player sends instead. */
++static void hls_source_setup (GstElement *playbin, GstElement *source, gpointer user_data) {
++    (void) playbin; (void) user_data;
++    if (g_object_class_find_property (G_OBJECT_GET_CLASS (source), "user-agent")) {
++        g_object_set (source, "user-agent",
++                      "AppleCoreMedia/1.0.0.21L569 (Apple TV; U; CPU OS 17_4 like Mac OS X; en_us)",
++                      NULL);
++    }
++}
++
++/* Pin the audio sample rate in front of the sink: an HLS variant switch can
++ * change it, and the audio sink is then rebuilt, which can leave playback
++ * without sound while the video keeps going. */
++static GstElement *make_hls_audio_sink (void) {
++    GstElement *bin = gst_bin_new ("hls-audiobin");
++    GstElement *conv = gst_element_factory_make ("audioconvert", NULL);
++    GstElement *resample = gst_element_factory_make ("audioresample", NULL);
++    GstElement *capsfilter = gst_element_factory_make ("capsfilter", NULL);
++    GstElement *sink = gst_element_factory_make ("autoaudiosink", NULL);
++    if (!bin || !conv || !resample || !capsfilter || !sink) {
++        return NULL;
++    }
++    GstCaps *caps = gst_caps_new_simple ("audio/x-raw", "rate", G_TYPE_INT, 48000, NULL);
++    g_object_set (capsfilter, "caps", caps, NULL);
++    gst_caps_unref (caps);
++    gst_bin_add_many (GST_BIN (bin), conv, resample, capsfilter, sink, NULL);
++    if (!gst_element_link_many (conv, resample, capsfilter, sink, NULL)) {
++        return NULL;
++    }
++    GstPad *pad = gst_element_get_static_pad (conv, "sink");
++    GstPad *ghost = gst_ghost_pad_new ("sink", pad);
++    gst_pad_set_active (ghost, TRUE);
++    gst_element_add_pad (bin, ghost);
++    gst_object_unref (pad);
++    return bin;
++}
++
+ void video_renderer_init(logger_t *render_logger, const char *server_name, videoflip_t videoflip[2], const char *parser, const char * rtp_pipeline,
+                           const char *decoder, const char *converter, const char *videosink, const char *videosink_options, 
+                           bool initial_fullscreen, bool video_sync, bool h265_support, bool coverart_support, guint playbin_version, const char *uri) {
+@@ -357,6 +395,13 @@ void video_renderer_init(logger_t *render_logger, const char *server_name, video
+             flags |= GST_PLAY_FLAG_BUFFERING;    // set by default in playbin3, but not in playbin2; is it needed?
+             g_object_set(renderer_type[i]->pipeline, "flags", flags, NULL);
+             g_object_set(renderer_type[i]->pipeline, "volume", hls_volume_level, NULL);
++            g_signal_connect (renderer_type[i]->pipeline, "source-setup", G_CALLBACK (hls_source_setup), NULL);
++            GstElement *hls_audio_sink = make_hls_audio_sink ();
++            if (hls_audio_sink) {
++                g_object_set (renderer_type[i]->pipeline, "audio-sink", hls_audio_sink, NULL);
++            } else {
++                logger_log(logger, LOGGER_ERR, "video_renderer_init: failed to build HLS audio sink (using default)");
++            }
+             //g_object_set (G_OBJECT (renderer_type[i]->pipeline), "uri", uri, NULL);
+         } else {
+             bool jpeg_pipeline = false;
+@@ -909,6 +954,14 @@ static gboolean gstreamer_video_pipeline_bus_callback(GstBus *bus, GstMessage *m
+     case GST_MESSAGE_DURATION:
+         hls_duration = GST_CLOCK_TIME_NONE;
+         break;
++    case GST_MESSAGE_LATENCY:
++        /* An element changed its latency (e.g. after an HLS variant switch).
++         * The pipeline does not redistribute latency by itself; without this the
++         * sinks keep the old latency and drop late frames (video stutter). */
++        if (hls_video) {
++            gst_bin_recalculate_latency (GST_BIN (renderer->pipeline));
++        }
++        break;
+     case GST_MESSAGE_BUFFERING:
+         if (hls_video) {
+             gint percent = -1;
+@@ -920,7 +973,12 @@ static gboolean gstreamer_video_pipeline_bus_callback(GstBus *bus, GstMessage *m
+                 renderer->buffering_level = percent;
+                 logger_log(logger, LOGGER_DEBUG, "Buffering :%d percent done", percent);
+                 if (percent < 100) {
+-                    gst_element_set_state (renderer->pipeline, GST_STATE_PAUSED);
++                    /* Only wait for the initial buffer. With GStreamer >= 1.24 (hlsdemux2)
++                     * buffering is reported continuously in "stream" mode and rarely
++                     * reaches 100%, which would pause the pipeline forever mid-playback. */
++                    if (!hls_playing) {
++                        gst_element_set_state (renderer->pipeline, GST_STATE_PAUSED);
++                    }
+                 } else {
+                     hls_buffer_full = TRUE;
+                     gst_element_set_state (renderer->pipeline, GST_STATE_PLAYING);
