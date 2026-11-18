@@ -10,7 +10,7 @@ Reproduced from a non-interactive shell / launchd-style environment, where
 
 ```
 $ env -u LANG -u LC_ALL -u LANGUAGE -u LC_MESSAGES uxplay -n iMac -hls
-Bail out! ERROR:/Users/apple/Applications/UxPlay/uxplay.cpp:3478:void real_main(int, char **):
+Bail out! ERROR:~/UxPlay/uxplay.cpp:3478:void real_main(int, char **):
     assertion failed: (!lang_system.empty())
 Abort trap: 6
 ```
