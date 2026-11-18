@@ -114,6 +114,7 @@ make -j4
 - [#640 macOS: uxplay started from /usr/local/bin loads two GLib copies and segfaults on HLS playback](https://github.com/FDH2/UxPlay/issues/640)
 - [#641 HLS (playbin3): hlsdemux2 buffering never reaches 100%, so the pipeline stays paused forever](https://github.com/FDH2/UxPlay/issues/641)
 - [#642 -hls aborts on an assertion when no locale environment variable is set](https://github.com/FDH2/UxPlay/issues/642)
+- [PR #643 -hls: fall back to a default language preference when no locale is set](https://github.com/FDH2/UxPlay/pull/643)
 
 `upstream/` 目录保留了草稿原文；`comment-596-playlist-lost.md` 未提交（证据不足以归因）。
 
